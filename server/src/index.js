@@ -735,6 +735,25 @@ app.post('/api/rooms', requireAuth, (req,res) => {
 });
 
 
+app.delete('/api/rooms/:id', requireAuth, (req,res) => {
+  const data = readData();
+  const room = data.rooms.find(r => r.id === req.params.id);
+  if (!room) return res.status(404).json({ error:'Room not found' });
+  const canDelete = room.owner_id === req.user.id || isAdminUser(req.user);
+  if (!canDelete) return res.status(403).json({ error:'Only the room owner or admin can delete this room' });
+
+  data.rooms = data.rooms.filter(r => r.id !== room.id);
+  data.room_members = data.room_members.filter(m => m.room_id !== room.id);
+  data.messages = data.messages.filter(m => m.room_id !== room.id);
+  data.room_invites = data.room_invites.filter(i => i.room_id !== room.id);
+  data.approval_requests = data.approval_requests.filter(r => !(r.target_type === 'room' && r.target_id === room.id));
+  data.notifications = data.notifications.filter(n => !(n.payload && (n.payload.roomId === room.id || n.payload.targetId === room.id)));
+
+  saveData();
+  res.json({ ok:true, message:'Room deleted permanently from public data' });
+});
+
+
 app.post('/api/rooms/:id/members', requireAuth, (req,res) => {
   const room = db.prepare('SELECT * FROM rooms WHERE id=?').get(req.params.id);
   if (!room) return res.status(404).json({error:'Room not found'});
