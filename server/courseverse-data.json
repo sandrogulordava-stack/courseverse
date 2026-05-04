@@ -1,0 +1,194 @@
+{
+  "users": [
+    {
+      "headline": "Senior Frontend Mentor",
+      "bio": "I teach practical web development.",
+      "avatar": "https://i.pravatar.cc/120?img=12",
+      "role": "instructor",
+      "id": "1efde1b9-cb07-431b-bd66-88a98d3c1a3a",
+      "name": "Demo Instructor",
+      "email": "instructor@courseverse.dev",
+      "password_hash": "$2a$10$SY7dOZRM3XfJ.307Dk2NAOvC515oHvx1wqJ.OpYeKL96q17UAea8.",
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "headline": "Future developer",
+      "bio": "Learning one project at a time.",
+      "avatar": "https://i.pravatar.cc/120?img=32",
+      "role": "student",
+      "id": "aa7e1f6f-95d4-4166-b874-d0cef50d79bb",
+      "name": "Demo Student",
+      "email": "student@courseverse.dev",
+      "password_hash": "$2a$10$SY7dOZRM3XfJ.307Dk2NAOvC515oHvx1wqJ.OpYeKL96q17UAea8.",
+      "created_at": "2026-05-04T15:53:32.654Z"
+    }
+  ],
+  "courses": [
+    {
+      "id": "c94b3001-157d-4fda-a65a-6c689e4b3afd",
+      "instructor_id": "1efde1b9-cb07-431b-bd66-88a98d3c1a3a",
+      "title": "React Masterclass 2026",
+      "category": "Programming",
+      "level": "Beginner",
+      "price": 39,
+      "image": "https://images.unsplash.com/photo-1633356122544-f134324a6cee?q=80&w=1400&auto=format&fit=crop",
+      "description": "Build modern React apps with components, hooks, routing and real projects.",
+      "video_url": "https://www.youtube.com/embed/dQw4w9WgXcQ",
+      "published": 1,
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "id": "a5f2f75d-1076-4533-8d68-200203a73547",
+      "instructor_id": "1efde1b9-cb07-431b-bd66-88a98d3c1a3a",
+      "title": "UI/UX Design System",
+      "category": "Design",
+      "level": "Intermediate",
+      "price": 49,
+      "image": "https://images.unsplash.com/photo-1545235617-9465d2a55698?q=80&w=1400&auto=format&fit=crop",
+      "description": "Create polished interfaces, design tokens, layouts and clickable prototypes.",
+      "video_url": "https://www.youtube.com/embed/dQw4w9WgXcQ",
+      "published": 1,
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "id": "4e79cd4e-9280-41e3-91be-478bffd8e2bd",
+      "instructor_id": "1efde1b9-cb07-431b-bd66-88a98d3c1a3a",
+      "title": "Digital Marketing Launchpad",
+      "category": "Marketing",
+      "level": "Beginner",
+      "price": 29,
+      "image": "https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1400&auto=format&fit=crop",
+      "description": "Plan campaigns, funnels, content calendars and analytics dashboards.",
+      "video_url": "https://www.youtube.com/embed/dQw4w9WgXcQ",
+      "published": 1,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    }
+  ],
+  "lessons": [
+    {
+      "id": "6396786d-2b2d-4a9b-88f1-b26f71a81e75",
+      "course_id": "c94b3001-157d-4fda-a65a-6c689e4b3afd",
+      "title": "Lesson 1: Intro",
+      "video_url": "",
+      "content": "Detailed lesson notes for React Masterclass 2026.",
+      "position": 1,
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "id": "8404ed8d-dd70-4cfc-bacb-350f7077e38e",
+      "course_id": "c94b3001-157d-4fda-a65a-6c689e4b3afd",
+      "title": "Lesson 2: Core Concepts",
+      "video_url": "",
+      "content": "Detailed lesson notes for React Masterclass 2026.",
+      "position": 2,
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "id": "c9ad3a65-9c44-48d4-9113-69e866abe4ba",
+      "course_id": "c94b3001-157d-4fda-a65a-6c689e4b3afd",
+      "title": "Lesson 3: Practice",
+      "video_url": "",
+      "content": "Detailed lesson notes for React Masterclass 2026.",
+      "position": 3,
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "id": "af7d8537-6103-49d0-91ea-dfebe0c8a00b",
+      "course_id": "c94b3001-157d-4fda-a65a-6c689e4b3afd",
+      "title": "Lesson 4: Project",
+      "video_url": "",
+      "content": "Detailed lesson notes for React Masterclass 2026.",
+      "position": 4,
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "id": "8a826579-a540-4eb2-a0c1-35777ae07ad6",
+      "course_id": "a5f2f75d-1076-4533-8d68-200203a73547",
+      "title": "Lesson 1: Intro",
+      "video_url": "",
+      "content": "Detailed lesson notes for UI/UX Design System.",
+      "position": 1,
+      "created_at": "2026-05-04T15:53:32.654Z"
+    },
+    {
+      "id": "4838b9f9-33e5-48d7-9192-54a0eb338458",
+      "course_id": "a5f2f75d-1076-4533-8d68-200203a73547",
+      "title": "Lesson 2: Core Concepts",
+      "video_url": "",
+      "content": "Detailed lesson notes for UI/UX Design System.",
+      "position": 2,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    },
+    {
+      "id": "7bae131a-b59b-4eda-813e-910fe9a016ad",
+      "course_id": "a5f2f75d-1076-4533-8d68-200203a73547",
+      "title": "Lesson 3: Practice",
+      "video_url": "",
+      "content": "Detailed lesson notes for UI/UX Design System.",
+      "position": 3,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    },
+    {
+      "id": "d8786799-a455-4349-8e0a-bcee5039cdec",
+      "course_id": "a5f2f75d-1076-4533-8d68-200203a73547",
+      "title": "Lesson 4: Project",
+      "video_url": "",
+      "content": "Detailed lesson notes for UI/UX Design System.",
+      "position": 4,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    },
+    {
+      "id": "db012ace-8a96-4210-aff1-67d0cad9857b",
+      "course_id": "4e79cd4e-9280-41e3-91be-478bffd8e2bd",
+      "title": "Lesson 1: Intro",
+      "video_url": "",
+      "content": "Detailed lesson notes for Digital Marketing Launchpad.",
+      "position": 1,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    },
+    {
+      "id": "8e3abd80-f132-4d77-a07e-4c4110467219",
+      "course_id": "4e79cd4e-9280-41e3-91be-478bffd8e2bd",
+      "title": "Lesson 2: Core Concepts",
+      "video_url": "",
+      "content": "Detailed lesson notes for Digital Marketing Launchpad.",
+      "position": 2,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    },
+    {
+      "id": "954823dc-8ff8-4059-a31f-50b54b1acf5e",
+      "course_id": "4e79cd4e-9280-41e3-91be-478bffd8e2bd",
+      "title": "Lesson 3: Practice",
+      "video_url": "",
+      "content": "Detailed lesson notes for Digital Marketing Launchpad.",
+      "position": 3,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    },
+    {
+      "id": "c7a1a39e-5ddb-4f42-917c-f3305c2a5ccb",
+      "course_id": "4e79cd4e-9280-41e3-91be-478bffd8e2bd",
+      "title": "Lesson 4: Project",
+      "video_url": "",
+      "content": "Detailed lesson notes for Digital Marketing Launchpad.",
+      "position": 4,
+      "created_at": "2026-05-04T15:53:32.655Z"
+    }
+  ],
+  "purchases": [],
+  "rooms": [
+    {
+      "id": "d18d2137-627c-4f73-bb07-1165ebc4a354",
+      "owner_id": "aa7e1f6f-95d4-4166-b874-d0cef50d79bb",
+      "title": "Live React Group",
+      "course_id": null,
+      "created_at": "2026-05-04T15:58:00.560Z"
+    }
+  ],
+  "room_members": [
+    {
+      "room_id": "d18d2137-627c-4f73-bb07-1165ebc4a354",
+      "user_id": "aa7e1f6f-95d4-4166-b874-d0cef50d79bb"
+    }
+  ],
+  "messages": []
+}
