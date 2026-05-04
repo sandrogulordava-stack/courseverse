@@ -19,8 +19,35 @@ function ensureShape() {
     if (typeof user.blocked_reason === 'undefined') user.blocked_reason = '';
   }
   for (const course of data.courses) {
-    if (!course.approval_status) course.approval_status = course.published === 0 ? 'hidden' : 'approved';
-    if (typeof course.published === 'undefined') course.published = 1;
+    // Normalize old course records from previous patches.
+    // Public pages only show courses that are BOTH approved and published.
+    if (typeof course.deleted === 'undefined') course.deleted = 0;
+    if (typeof course.hidden === 'undefined') course.hidden = 0;
+    if (!course.status) {
+      if (course.approval_status === 'approved' || course.published === 1) course.status = 'published';
+      else if (course.approval_status === 'rejected') course.status = 'rejected';
+      else course.status = 'pending';
+    }
+    if (!course.approval_status) {
+      if (course.status === 'published' || course.published === 1) course.approval_status = 'approved';
+      else if (course.status === 'rejected') course.approval_status = 'rejected';
+      else course.approval_status = 'pending';
+    }
+    if (course.approval_status === 'approved' || course.status === 'published') {
+      course.published = 1;
+      course.hidden = 0;
+      course.status = 'published';
+      course.approval_status = 'approved';
+    } else if (course.approval_status === 'rejected' || course.status === 'rejected') {
+      course.published = 0;
+      course.hidden = 1;
+      course.status = 'rejected';
+      course.approval_status = 'rejected';
+    } else {
+      course.published = Number(course.published || 0);
+      if (course.published !== 1) course.hidden = 1;
+    }
+    if (!course.image) course.image = 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1400&auto=format&fit=crop';
   }
   for (const room of data.rooms) {
     if (typeof room.is_public === 'undefined') room.is_public = 1;

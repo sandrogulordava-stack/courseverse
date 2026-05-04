@@ -142,7 +142,42 @@ function censorText(text = '') {
 function adminCourseView(course) {
   const data = readData();
   const instructor = data.users.find(u => u.id === course.instructor_id);
-  return { ...course, instructor_name: instructor?.name || 'Unknown', instructor_email: instructor?.email || '' };
+  return {
+    ...course,
+    instructor_name: instructor?.name || 'Unknown',
+    instructor_email: instructor?.email || '',
+    instructor_avatar: instructor?.avatar || ''
+  };
+}
+
+function isCoursePublic(course) {
+  if (!course) return false;
+  if (Number(course.deleted || 0) === 1) return false;
+  if (Number(course.hidden || 0) === 1) return false;
+  return course.approval_status === 'approved' || course.status === 'published' || Number(course.published || 0) === 1;
+}
+
+function publishCourse(course, adminId = '') {
+  if (!course) return null;
+  course.published = 1;
+  course.hidden = 0;
+  course.deleted = 0;
+  course.status = 'published';
+  course.approval_status = 'approved';
+  course.published_at = course.published_at || now();
+  course.approved_at = course.approved_at || now();
+  if (adminId) course.approved_by = adminId;
+  return course;
+}
+
+function unpublishCourse(course, status = 'hidden', note = '') {
+  if (!course) return null;
+  course.published = 0;
+  course.hidden = 1;
+  course.status = status;
+  course.approval_status = status === 'rejected' ? 'rejected' : 'hidden';
+  if (note) course.review_note = note;
+  return course;
 }
 
 function saveViolation({ user_id, target_type, target_id, text, hits }) {
@@ -186,12 +221,24 @@ app.get('/auth/google/callback', passport.authenticate('google', { failureRedire
 app.get('/api/courses', (req,res) => {
   const { q='', category='', level='', priceMin='', priceMax='', sort='newest' } = req.query;
   const data = readData();
+  let changed = false;
+
+  // Self-heal old records: some previous patches approved a course but left published=0.
+  for (const c of data.courses) {
+    if ((c.approval_status === 'approved' || c.status === 'published') && Number(c.published || 0) !== 1) {
+      publishCourse(c);
+      changed = true;
+    }
+  }
+  if (changed) saveData();
+
   const text = String(q || '').trim().toLowerCase();
   const min = priceMin !== '' ? Number(priceMin) : null;
   const max = priceMax !== '' ? Number(priceMax) : null;
+
   let courses = data.courses
-    .filter(c => c.published !== 0 && (c.approval_status || 'approved') === 'approved')
-    .filter(c => !text || [c.title, c.description, c.category, c.level].join(' ').toLowerCase().includes(text))
+    .filter(isCoursePublic)
+    .filter(c => !text || [c.title, c.description, c.category, c.level, requestUserName(c.instructor_id)].join(' ').toLowerCase().includes(text))
     .filter(c => !category || c.category === category)
     .filter(c => !level || c.level === level)
     .filter(c => min === null || Number(c.price || 0) >= min)
@@ -199,20 +246,37 @@ app.get('/api/courses', (req,res) => {
     .map(c => {
       const instructor = data.users.find(u => u.id === c.instructor_id) || {};
       const purchases = data.purchases.filter(p => p.course_id === c.id).length;
-      return { ...c, instructor_name: instructor.name || 'Unknown', instructor_avatar: instructor.avatar || '', students_count: purchases, rating: c.rating || 4.8 };
+      return {
+        ...c,
+        instructor_name: instructor.name || 'Unknown',
+        instructor_avatar: instructor.avatar || '',
+        students_count: purchases,
+        rating: c.rating || 4.8,
+        image: c.image || 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1400&auto=format&fit=crop'
+      };
     });
+
   if (sort === 'price_low') courses.sort((a,b)=>Number(a.price||0)-Number(b.price||0));
   else if (sort === 'price_high') courses.sort((a,b)=>Number(b.price||0)-Number(a.price||0));
   else if (sort === 'popular') courses.sort((a,b)=>(b.students_count||0)-(a.students_count||0));
-  else courses.sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  else courses.sort((a,b)=>String(b.created_at || '').localeCompare(String(a.created_at || '')));
   res.json(courses);
 });
 
 app.get('/api/courses/:id', (req,res) => {
-  const course = db.prepare(`SELECT c.*, u.name instructor_name, u.avatar instructor_avatar FROM courses c JOIN users u ON u.id=c.instructor_id WHERE c.id=?`).get(req.params.id);
+  const data = readData();
+  const course = data.courses.find(c => c.id === req.params.id);
   if (!course) return res.status(404).json({error:'Course not found'});
-  const lessons = db.prepare('SELECT * FROM lessons WHERE course_id=? ORDER BY position').all(req.params.id);
-  res.json({...course, lessons});
+  if (!isCoursePublic(course)) return res.status(404).json({error:'Course is not public yet'});
+  const instructor = data.users.find(u => u.id === course.instructor_id) || {};
+  const lessons = data.lessons.filter(l => l.course_id === course.id).sort((a,b)=>Number(a.position || 0)-Number(b.position || 0));
+  res.json({
+    ...course,
+    image: course.image || 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1400&auto=format&fit=crop',
+    instructor_name: instructor.name || 'Unknown',
+    instructor_avatar: instructor.avatar || '',
+    lessons
+  });
 });
 
 app.post('/api/courses', requireAuth, (req,res) => {
@@ -236,7 +300,11 @@ app.post('/api/courses', requireAuth, (req,res) => {
     description: censorText(description),
     video_url: video_url || '',
     published: approved ? 1 : 0,
+    hidden: approved ? 0 : 1,
+    deleted: 0,
+    status: approved ? 'published' : 'pending',
     approval_status: approved ? 'approved' : 'pending',
+    published_at: approved ? now() : '',
     created_at: now()
   };
   data.courses.push(course);
@@ -244,7 +312,14 @@ app.post('/api/courses', requireAuth, (req,res) => {
   saveData();
 
   if (!approved) {
-    createApprovalRequest({ requester_id: req.user.id, target_type: 'course', target_id: id, title: course.title, body: `Course publish request: ${course.title}`, payload: { category, level, price: course.price } });
+    createApprovalRequest({
+      requester_id: req.user.id,
+      target_type: 'course',
+      target_id: id,
+      title: course.title,
+      body: `Course publish request: ${course.title}`,
+      payload: { category, level, price: course.price, image: course.image, description: course.description, lessons_count: Array.isArray(lessons) ? lessons.length : 0 }
+    });
     return res.json({ id, pending_approval: true, message: 'Course sent to admin for approval. It will appear on the site after admin approves it.' });
   }
 
@@ -252,19 +327,33 @@ app.post('/api/courses', requireAuth, (req,res) => {
 });
 
 app.post('/api/courses/:id/buy', requireAuth, (req,res) => {
-  const course = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id);
-  if (!course) return res.status(404).json({error:'Course not found'});
-  db.prepare('INSERT OR IGNORE INTO purchases (id,user_id,course_id,amount) VALUES (?,?,?,?)').run(uuid(), req.user.id, course.id, course.price);
-  res.json({ok:true, message:'Enrollment complete. Demo checkout succeeded.', receipt:{ courseId: course.id, amount: course.price, currency:'USD', paid_at: now() }});
+  const data = readData();
+  const course = data.courses.find(c => c.id === req.params.id);
+  if (!course || !isCoursePublic(course)) return res.status(404).json({error:'Course not found'});
+  if (!data.purchases.some(p => p.user_id === req.user.id && p.course_id === course.id)) {
+    data.purchases.push({ id: uuid(), user_id: req.user.id, course_id: course.id, amount: Number(course.price || 0), created_at: now() });
+    saveData();
+  }
+  res.json({ok:true, message:'Enrollment complete. Demo checkout succeeded.', receipt:{ courseId: course.id, amount: Number(course.price || 0), currency:'USD', paid_at: now() }});
 });
 
 app.get('/api/my/courses', requireAuth, (req,res) => {
-  const enrolled = db.prepare(`SELECT c.* FROM purchases p JOIN courses c ON c.id=p.course_id WHERE p.user_id=? ORDER BY p.created_at DESC`).all(req.user.id);
-  const teaching = db.prepare('SELECT * FROM courses WHERE instructor_id=? ORDER BY created_at DESC').all(req.user.id);
+  const data = readData();
+  const enrolled = data.purchases
+    .filter(p => p.user_id === req.user.id)
+    .map(p => data.courses.find(c => c.id === p.course_id))
+    .filter(Boolean)
+    .filter(isCoursePublic)
+    .map(adminCourseView)
+    .sort((a,b)=>String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
+  const teaching = data.courses
+    .filter(c => c.instructor_id === req.user.id)
+    .map(adminCourseView)
+    .sort((a,b)=>String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
   res.json({enrolled, teaching});
 });
-
-
 
 app.get('/api/users/:id/public', requireAuth, (req,res) => {
   const data = readData();
@@ -273,7 +362,7 @@ app.get('/api/users/:id/public', requireAuth, (req,res) => {
   const pendingOut = data.friend_requests.find(r => r.from_user_id === req.user.id && r.to_user_id === user.id && r.status === 'pending');
   const pendingIn = data.friend_requests.find(r => r.from_user_id === user.id && r.to_user_id === req.user.id && r.status === 'pending');
   const courses = data.courses
-    .filter(c => c.instructor_id === user.id && c.published !== 0 && c.approval_status !== 'pending')
+    .filter(c => c.instructor_id === user.id && isCoursePublic(c))
     .map(adminCourseView)
     .map(c => ({...c, lessons: undefined}))
     .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
@@ -452,7 +541,7 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req,res) => {
   res.json({
     users: data.users.length,
     courses: data.courses.length,
-    published_courses: data.courses.filter(c => c.published !== 0).length,
+    published_courses: data.courses.filter(isCoursePublic).length,
     rooms: data.rooms.length,
     messages: data.messages.length,
     pending_friend_requests: data.friend_requests.filter(r => r.status === 'pending').length,
@@ -485,7 +574,10 @@ app.patch('/api/admin/courses/:id', requireAuth, requireAdmin, (req,res) => {
   const data = readData();
   const course = data.courses.find(c => c.id === req.params.id);
   if (!course) return res.status(404).json({ error:'Course not found' });
-  if (typeof req.body.published !== 'undefined') course.published = req.body.published ? 1 : 0;
+  if (typeof req.body.published !== 'undefined') {
+    if (req.body.published) publishCourse(course, req.user.id);
+    else unpublishCourse(course, 'hidden');
+  }
   if (typeof req.body.title === 'string') course.title = censorText(req.body.title);
   if (typeof req.body.description === 'string') course.description = censorText(req.body.description);
   saveData();
@@ -622,9 +714,8 @@ app.post('/api/admin/approval-requests/:id/respond', requireAuth, requireAdmin, 
   if (request.target_type === 'course') {
     const course = data.courses.find(c => c.id === request.target_id);
     if (course) {
-      course.approval_status = approve ? 'approved' : 'rejected';
-      course.published = approve ? 1 : 0;
-      course.hidden = approve ? 0 : 1;
+      if (approve) publishCourse(course, req.user.id);
+      else unpublishCourse(course, 'rejected', note);
       course.review_note = note;
       course.approved_at = approve ? now() : course.approved_at;
       course.approved_by = approve ? req.user.id : course.approved_by;
@@ -649,6 +740,21 @@ app.post('/api/admin/approval-requests/:id/respond', requireAuth, requireAdmin, 
   saveData();
   notifyUser(request.requester_id, approve ? 'approval_approved' : 'approval_rejected', approve ? 'Your request was approved' : 'Your request was rejected', `${request.title} was ${approve ? 'approved and published' : 'rejected'} by admin.${note ? ' Note: ' + note : ''}`, { requestId: request.id, targetType: request.target_type, targetId: request.target_id });
   res.json({ ok:true, request: approvalRequestView(request) });
+});
+
+app.post('/api/admin/fix-course-visibility', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  let changed = 0;
+  for (const c of data.courses) {
+    if (c.approval_status === 'approved' || c.status === 'published') {
+      const before = JSON.stringify({ published:c.published, hidden:c.hidden, status:c.status, approval_status:c.approval_status });
+      publishCourse(c, req.user.id);
+      const after = JSON.stringify({ published:c.published, hidden:c.hidden, status:c.status, approval_status:c.approval_status });
+      if (before !== after) changed += 1;
+    }
+  }
+  saveData();
+  res.json({ ok:true, message:'Course visibility repaired', changed });
 });
 
 app.get('/api/admin/reports', requireAuth, requireAdmin, (req,res) => {
