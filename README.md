@@ -76,3 +76,24 @@ POST /api/courses/:id/buy
 ## შენიშვნა
 
 ეს არ არის უბრალოდ დიზაინი — პროექტი რეალურად ეშვება და აქვს backend, database, auth, API, realtime chat და WebRTC signaling. Production-ისთვის საჭიროა payment integration, file/video hosting, admin panel, moderation და deployment კონფიგურაცია.
+
+## Zoom-style Classroom Upgrade
+
+This build includes a more Zoom-like classroom experience:
+
+- Pre-join screen
+- Large video stage
+- Participant sidebar
+- Chat/sidebar tabs
+- Friend invites from inside the room
+- Copy invite code
+- Mute/unmute microphone
+- Start/stop camera
+- Screen sharing + stop sharing
+- Leave call
+- Fullscreen meeting mode
+- Typing indicator
+- Pinned chat message UI
+- Participant live/idle status
+
+After copying this version into your project, redeploy backend on Render and rebuild/reupload the frontend `client/dist` on Netlify.

@@ -5,11 +5,23 @@ import { v4 as uuid } from 'uuid';
 
 const DB_FILE = path.join(process.cwd(), 'courseverse-data.json');
 
-const initial = () => ({ users: [], courses: [], lessons: [], purchases: [], rooms: [], room_members: [], messages: [] });
+const initial = () => ({ users: [], courses: [], lessons: [], purchases: [], rooms: [], room_members: [], messages: [], friends: [], friend_requests: [], notifications: [], room_invites: [] });
 let data = initial();
 
+function ensureShape() {
+  const base = initial();
+  for (const key of Object.keys(base)) {
+    if (!Array.isArray(data[key])) data[key] = [];
+  }
+  for (const room of data.rooms) {
+    if (typeof room.is_public === 'undefined') room.is_public = 1;
+    if (!room.invite_code) room.invite_code = String(room.id).slice(0, 8).toUpperCase();
+    if (!room.description) room.description = '';
+  }
+}
 function load() {
   if (fs.existsSync(DB_FILE)) data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  ensureShape();
 }
 function save() {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
@@ -141,7 +153,7 @@ export const db = {
         }
         if (s.startsWith('INSERT INTO rooms')) {
           const [id,owner_id,title,course_id] = params;
-          data.rooms.push({ id,owner_id,title,course_id,created_at:now() });
+          data.rooms.push({ id,owner_id,title,course_id,description:'',is_public:1,invite_code:String(id).slice(0,8).toUpperCase(),created_at:now() });
           save(); return { changes: 1 };
         }
         if (s.startsWith('INSERT OR IGNORE INTO room_members')) {
@@ -163,7 +175,23 @@ export const db = {
 export function migrate() {
   load();
   if (data.users.length === 0) seed();
+  ensureShape();
   save();
+}
+
+export function readData() {
+  load();
+  return data;
+}
+
+export function saveData() {
+  ensureShape();
+  save();
+}
+
+export function publicUserFromData(u) {
+  if (!u) return null;
+  return { id:u.id, name:u.name, email:u.email, avatar:u.avatar || '', role:u.role || 'student', headline:u.headline || '', bio:u.bio || '' };
 }
 
 function seed() {
