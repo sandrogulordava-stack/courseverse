@@ -4,7 +4,7 @@ import { v4 as uuid } from 'uuid';
 import { db, readData, saveData } from './db.js';
 
 export function sign(user) {
-  return jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET || 'dev-secret', { expiresIn: '7d' });
+  return jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET || 'dev-secret', { expiresIn: '30d' });
 }
 
 export function isAdminUser(user) {
@@ -73,7 +73,7 @@ export function registerAuthRoutes(app) {
     const current = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
     let approvedAvatar = current.avatar || '';
     let avatarPending = false;
-    if (avatar && avatar !== current.avatar) {
+    if (avatar && avatar !== current.avatar && String(avatar).trim()) {
       const data = readData();
       const request = { id: uuid(), requester_id: req.user.id, target_type:'avatar', target_id:req.user.id, title:`Avatar change: ${current.name}`, body:'User requested a new profile photo. Approve it before it appears publicly.', payload:{ avatar }, status:'pending', created_at:new Date().toISOString() };
       data.approval_requests.unshift(request);

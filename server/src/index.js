@@ -257,6 +257,38 @@ app.get('/api/my/courses', requireAuth, (req,res) => {
 });
 
 
+
+app.get('/api/users/:id/public', requireAuth, (req,res) => {
+  const data = readData();
+  const user = data.users.find(u => u.id === req.params.id && !u.deleted && u.status !== 'blocked');
+  if (!user) return res.status(404).json({ error:'Profile not found' });
+  const pendingOut = data.friend_requests.find(r => r.from_user_id === req.user.id && r.to_user_id === user.id && r.status === 'pending');
+  const pendingIn = data.friend_requests.find(r => r.from_user_id === user.id && r.to_user_id === req.user.id && r.status === 'pending');
+  const courses = data.courses
+    .filter(c => c.instructor_id === user.id && c.published !== 0 && c.approval_status !== 'pending')
+    .map(adminCourseView)
+    .map(c => ({...c, lessons: undefined}))
+    .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  res.json({
+    user: publicUserFromData(user),
+    is_self: user.id === req.user.id,
+    is_friend: isFriend(req.user.id, user.id),
+    pending_out: Boolean(pendingOut),
+    pending_in: Boolean(pendingIn),
+    friend_request_id: pendingIn?.id || null,
+    can_message: isFriend(req.user.id, user.id),
+    courses
+  });
+});
+
+app.delete('/api/friends/:id', requireAuth, (req,res) => {
+  const data = readData();
+  const before = data.friends.length;
+  data.friends = data.friends.filter(f => !((f.user1_id === req.user.id && f.user2_id === req.params.id) || (f.user1_id === req.params.id && f.user2_id === req.user.id)));
+  saveData();
+  res.json({ ok:true, removed: before - data.friends.length });
+});
+
 app.get('/api/users', requireAuth, (req,res) => {
   const q = String(req.query.q || '').toLowerCase();
   const data = readData();
@@ -655,6 +687,7 @@ app.post('/api/rooms/join', requireAuth, (req,res) => {
   const room = data.rooms.find(r => String(r.invite_code || '').toLowerCase() === lookup || String(r.id).toLowerCase() === lookup);
   if (!room) return res.status(404).json({ error:'Room not found' });
   if ((room.approval_status || 'approved') === 'rejected') return res.status(403).json({ error:'This room was rejected by moderation' });
+  if (room.allow_link_join === 0 && !data.room_members.some(m => m.room_id === room.id && m.user_id === req.user.id)) return res.status(403).json({ error:'This room does not allow link joining' });
   if (!data.room_members.some(m => m.room_id === room.id && m.user_id === req.user.id)) data.room_members.push({ room_id: room.id, user_id: req.user.id });
   saveData();
   notifyUser(room.owner_id, 'room_join', 'New room member', `${req.user.name} joined ${room.title}.`, { roomId: room.id });
