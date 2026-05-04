@@ -169,14 +169,28 @@ app.get('/auth/google/callback', passport.authenticate('google', { failureRedire
 });
 
 app.get('/api/courses', (req,res) => {
-  const {q='', category='', level=''} = req.query;
-  let sql = `SELECT c.*, u.name instructor_name, u.avatar instructor_avatar FROM courses c JOIN users u ON u.id=c.instructor_id WHERE c.published=1`;
-  const params = [];
-  if (q) { sql += ' AND (c.title LIKE ? OR c.description LIKE ?)'; params.push(`%${q}%`,`%${q}%`); }
-  if (category) { sql += ' AND c.category=?'; params.push(category); }
-  if (level) { sql += ' AND c.level=?'; params.push(level); }
-  sql += ' ORDER BY c.created_at DESC';
-  res.json(db.prepare(sql).all(...params));
+  const { q='', category='', level='', priceMin='', priceMax='', sort='newest' } = req.query;
+  const data = readData();
+  const text = String(q || '').trim().toLowerCase();
+  const min = priceMin !== '' ? Number(priceMin) : null;
+  const max = priceMax !== '' ? Number(priceMax) : null;
+  let courses = data.courses
+    .filter(c => c.published !== 0 && (c.approval_status || 'approved') === 'approved')
+    .filter(c => !text || [c.title, c.description, c.category, c.level].join(' ').toLowerCase().includes(text))
+    .filter(c => !category || c.category === category)
+    .filter(c => !level || c.level === level)
+    .filter(c => min === null || Number(c.price || 0) >= min)
+    .filter(c => max === null || Number(c.price || 0) <= max)
+    .map(c => {
+      const instructor = data.users.find(u => u.id === c.instructor_id) || {};
+      const purchases = data.purchases.filter(p => p.course_id === c.id).length;
+      return { ...c, instructor_name: instructor.name || 'Unknown', instructor_avatar: instructor.avatar || '', students_count: purchases, rating: c.rating || 4.8 };
+    });
+  if (sort === 'price_low') courses.sort((a,b)=>Number(a.price||0)-Number(b.price||0));
+  else if (sort === 'price_high') courses.sort((a,b)=>Number(b.price||0)-Number(a.price||0));
+  else if (sort === 'popular') courses.sort((a,b)=>(b.students_count||0)-(a.students_count||0));
+  else courses.sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  res.json(courses);
 });
 
 app.get('/api/courses/:id', (req,res) => {
@@ -226,7 +240,7 @@ app.post('/api/courses/:id/buy', requireAuth, (req,res) => {
   const course = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id);
   if (!course) return res.status(404).json({error:'Course not found'});
   db.prepare('INSERT OR IGNORE INTO purchases (id,user_id,course_id,amount) VALUES (?,?,?,?)').run(uuid(), req.user.id, course.id, course.price);
-  res.json({ok:true, message:'Demo purchase completed. Replace this with Stripe/PayPal in production.'});
+  res.json({ok:true, message:'Enrollment complete. Demo checkout succeeded.', receipt:{ courseId: course.id, amount: course.price, currency:'USD', paid_at: now() }});
 });
 
 app.get('/api/my/courses', requireAuth, (req,res) => {
@@ -515,6 +529,12 @@ app.post('/api/admin/approval-requests/:id/respond', requireAuth, requireAdmin, 
     }
   }
 
+  if (request.target_type === 'avatar') {
+    const targetUser = data.users.find(u => u.id === request.target_id);
+    if (targetUser && approve && request.payload?.avatar) targetUser.avatar = request.payload.avatar;
+    if (targetUser) targetUser.avatar_approval_status = request.status;
+  }
+
   saveData();
   notifyUser(request.requester_id, approve ? 'approval_approved' : 'approval_rejected', approve ? 'Your request was approved' : 'Your request was rejected', `${request.title} was ${approve ? 'approved and published' : 'rejected'} by admin.${note ? ' Note: ' + note : ''}`, { requestId: request.id, targetType: request.target_type, targetId: request.target_id });
   res.json({ ok:true, request: approvalRequestView(request) });
@@ -548,11 +568,22 @@ app.get('/api/rooms/public', requireAuth, (req,res) => {
   res.json(rooms);
 });
 
-app.post('/api/rooms/join', requireAuth, (req,res) => {
-  const { inviteCode } = req.body;
+app.get('/api/rooms/invite/:code', requireAuth, (req,res) => {
+  const code = String(req.params.code || '').toLowerCase();
   const data = readData();
-  const room = data.rooms.find(r => String(r.invite_code).toLowerCase() === String(inviteCode || '').toLowerCase());
+  const room = data.rooms.find(r => String(r.invite_code || '').toLowerCase() === code || String(r.id).toLowerCase() === code);
   if (!room) return res.status(404).json({ error:'Room not found' });
+  const isMember = data.room_members.some(m => m.room_id === room.id && m.user_id === req.user.id);
+  res.json({ room: roomWithOwner(room), isMember, canJoin: true });
+});
+
+app.post('/api/rooms/join', requireAuth, (req,res) => {
+  const { inviteCode, code, roomId } = req.body;
+  const lookup = String(inviteCode || code || roomId || '').toLowerCase();
+  const data = readData();
+  const room = data.rooms.find(r => String(r.invite_code || '').toLowerCase() === lookup || String(r.id).toLowerCase() === lookup);
+  if (!room) return res.status(404).json({ error:'Room not found' });
+  if ((room.approval_status || 'approved') === 'rejected') return res.status(403).json({ error:'This room was rejected by moderation' });
   if (!data.room_members.some(m => m.room_id === room.id && m.user_id === req.user.id)) data.room_members.push({ room_id: room.id, user_id: req.user.id });
   saveData();
   notifyUser(room.owner_id, 'room_join', 'New room member', `${req.user.name} joined ${room.title}.`, { roomId: room.id });
@@ -562,18 +593,23 @@ app.post('/api/rooms/join', requireAuth, (req,res) => {
 
 
 app.post('/api/rooms', requireAuth, (req,res) => {
-  const {title, description='', memberIds=[], course_id=null, is_public=1} = req.body;
+  const {title, description='', memberIds=[], course_id=null, is_public=1, privacy='public', allow_link_join=true, waiting_room=false, max_members=40} = req.body;
   const id = uuid();
   const data = readData();
-  const approved = isAdminUser(req.user) || !is_public;
+  const wantsPublic = privacy === 'public' || is_public === 1 || is_public === true;
+  const approved = isAdminUser(req.user) || !wantsPublic;
   const room = {
     id,
     owner_id: req.user.id,
     title: title || 'New classroom',
     description,
     course_id,
-    requested_public: is_public ? 1 : 0,
-    is_public: approved && is_public ? 1 : 0,
+    privacy,
+    allow_link_join: allow_link_join ? 1 : 0,
+    waiting_room: waiting_room ? 1 : 0,
+    max_members: Number(max_members || 40),
+    requested_public: wantsPublic ? 1 : 0,
+    is_public: approved && wantsPublic ? 1 : 0,
     approval_status: approved ? 'approved' : 'pending',
     invite_code: String(id).slice(0,8).toUpperCase(),
     created_at: now()
@@ -587,7 +623,7 @@ app.post('/api/rooms', requireAuth, (req,res) => {
   saveData();
 
   if (!approved) {
-    createApprovalRequest({ requester_id: req.user.id, target_type: 'room', target_id: id, title: room.title, body: `Public classroom request: ${room.title}`, payload: { description, requested_public: 1 } });
+    createApprovalRequest({ requester_id: req.user.id, target_type: 'room', target_id: id, title: room.title, body: `Public classroom request: ${room.title}`, payload: { description, requested_public: wantsPublic ? 1 : 0, privacy, allow_link_join, waiting_room, max_members } });
     return res.json({ id, room, pending_approval: true, message: 'Room created privately and sent to admin for public approval.' });
   }
 

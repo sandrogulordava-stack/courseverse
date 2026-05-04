@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { v4 as uuid } from 'uuid';
-import { db } from './db.js';
+import { db, readData, saveData } from './db.js';
 
 export function sign(user) {
   return jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET || 'dev-secret', { expiresIn: '7d' });
@@ -57,8 +57,20 @@ export function registerAuthRoutes(app) {
 
   app.put('/api/me', requireAuth, (req,res) => {
     const {name,headline,bio,avatar,role} = req.body;
+    const current = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+    let approvedAvatar = current.avatar || '';
+    let avatarPending = false;
+    if (avatar && avatar !== current.avatar) {
+      const data = readData();
+      const request = { id: uuid(), requester_id: req.user.id, target_type:'avatar', target_id:req.user.id, title:`Avatar change: ${current.name}`, body:'User requested a new profile photo. Approve it before it appears publicly.', payload:{ avatar }, status:'pending', created_at:new Date().toISOString() };
+      data.approval_requests.unshift(request);
+      data.notifications.unshift({ id: uuid(), user_id:req.user.id, type:'avatar_pending', title:'Profile photo sent for approval', body:'Your new profile photo will appear after admin approves it.', payload:{ requestId: request.id }, read:false, created_at:new Date().toISOString() });
+      saveData();
+      avatarPending = true;
+    }
     db.prepare('UPDATE users SET name=?, headline=?, bio=?, avatar=?, role=? WHERE id=?')
-      .run(name || req.user.name, headline || '', bio || '', avatar || req.user.avatar, role || req.user.role, req.user.id);
-    res.json(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)));
+      .run(name || req.user.name, headline || '', bio || '', approvedAvatar, role || req.user.role, req.user.id);
+    const updated = publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id));
+    res.json({ ...updated, avatar_pending: avatarPending });
   });
 }
