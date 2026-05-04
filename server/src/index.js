@@ -8,7 +8,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { v4 as uuid } from 'uuid';
 import { db, migrate, readData, saveData, publicUserFromData } from './db.js';
-import { registerAuthRoutes, requireAuth, publicUser, sign } from './auth.js';
+import { registerAuthRoutes, requireAuth, publicUser, sign, isAdminUser } from './auth.js';
 
 migrate();
 const app = express();
@@ -16,7 +16,7 @@ const httpServer = createServer(app);
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 
 app.use(cors({ origin: CLIENT_URL, credentials: true }));
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '12mb' }));
 app.use(session({ secret: process.env.SESSION_SECRET || 'dev-session', resave: false, saveUninitialized: false }));
 app.use(passport.initialize());
 app.use(passport.session());
@@ -57,11 +57,107 @@ function notifyUser(user_id, type, title, body, payload = {}) {
   io.to(`user:${user_id}`).emit('notification:new', n);
   return n;
 }
+
+function notifyAdmins(type, title, body, payload = {}) {
+  const data = readData();
+  const admins = data.users.filter(u => isAdminUser(u));
+  for (const admin of admins) {
+    notifyUser(admin.id, type, title, body, payload);
+  }
+  return admins.length;
+}
+function requestUserName(userId) {
+  const data = readData();
+  return data.users.find(u => u.id === userId)?.name || 'Unknown user';
+}
+function approvalRequestView(r) {
+  const data = readData();
+  const requester = data.users.find(u => u.id === r.requester_id);
+  let target = null;
+  if (r.target_type === 'course') target = data.courses.find(c => c.id === r.target_id);
+  if (r.target_type === 'room') target = data.rooms.find(room => room.id === r.target_id);
+  return { ...r, requester: publicUserFromData(requester), target };
+}
+function createApprovalRequest({ requester_id, target_type, target_id, title, body, payload = {} }) {
+  const data = readData();
+  const request = { id: uuid(), requester_id, target_type, target_id, title, body, payload, status: 'pending', created_at: now() };
+  data.approval_requests.unshift(request);
+  saveData();
+  notifyAdmins('admin_approval_request', 'New approval request', `${requestUserName(requester_id)} requested approval: ${title}`, { requestId: request.id, targetType: target_type, targetId: target_id });
+  return request;
+}
 function roomWithOwner(room) {
   const data = readData();
   const owner = data.users.find(u => u.id === room.owner_id);
   const members = data.room_members.filter(m => m.room_id === room.id).map(m => publicUserFromData(data.users.find(u => u.id === m.user_id))).filter(Boolean);
   return { ...room, owner_name: owner?.name || 'Unknown', members_count: members.length, members };
+}
+
+function requireAdmin(req,res,next) {
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: 'Admin only' });
+  next();
+}
+function moderationSettings() {
+  const data = readData();
+  if (!Array.isArray(data.moderation_settings) || data.moderation_settings.length === 0) {
+    data.moderation_settings = [{ banned_words: ['spam','scam'], auto_unpublish: true }];
+    saveData();
+  }
+  const settings = data.moderation_settings[0];
+  settings.banned_words = Array.isArray(settings.banned_words) ? settings.banned_words : [];
+  settings.auto_unpublish = settings.auto_unpublish !== false;
+  return settings;
+}
+function normalizeWords(words = []) {
+  return Array.from(new Set(String(words).split(',').map(w => w.trim().toLowerCase()).filter(Boolean)));
+}
+function escapeRegExp(value) {
+  return String(value).replace(new RegExp('[.*+?^${}()|\[\]\\]', 'g'), '\$&');
+}
+function findBannedWords(text = '') {
+  const lower = String(text || '').toLowerCase();
+  return moderationSettings().banned_words.filter(w => w && lower.includes(w.toLowerCase()));
+}
+function censorText(text = '') {
+  let out = String(text || '');
+  for (const word of moderationSettings().banned_words) {
+    if (!word) continue;
+    const mask = word.length <= 2 ? '*'.repeat(word.length) : word[0] + '*'.repeat(Math.max(2, word.length - 2)) + word[word.length - 1];
+    out = out.replace(new RegExp(escapeRegExp(word), 'gi'), mask);
+  }
+  return out;
+}
+function adminCourseView(course) {
+  const data = readData();
+  const instructor = data.users.find(u => u.id === course.instructor_id);
+  return { ...course, instructor_name: instructor?.name || 'Unknown', instructor_email: instructor?.email || '' };
+}
+
+function saveViolation({ user_id, target_type, target_id, text, hits }) {
+  if (!hits?.length) return;
+  const data = readData();
+  data.moderation_violations.unshift({ id: uuid(), user_id, target_type, target_id, text: String(text || '').slice(0, 500), hits, created_at: now() });
+  saveData();
+}
+function dmThreadView(thread, userId) {
+  const data = readData();
+  const otherId = thread.user1_id === userId ? thread.user2_id : thread.user1_id;
+  const other = publicUserFromData(data.users.find(u => u.id === otherId));
+  const last = data.direct_messages.filter(m => m.thread_id === thread.id).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
+  return { ...thread, other_user: other, last_message: last };
+}
+function getOrCreateDmThread(userA, userB) {
+  const data = readData();
+  let thread = data.direct_threads.find(t => (t.user1_id === userA && t.user2_id === userB) || (t.user1_id === userB && t.user2_id === userA));
+  if (!thread) {
+    thread = { id: uuid(), user1_id: userA, user2_id: userB, created_at: now(), updated_at: now() };
+    data.direct_threads.push(thread);
+    saveData();
+  }
+  return thread;
+}
+function userInDmThread(thread, userId) {
+  return thread && (thread.user1_id === userId || thread.user2_id === userId);
 }
 
 registerAuthRoutes(app);
@@ -93,12 +189,37 @@ app.get('/api/courses/:id', (req,res) => {
 app.post('/api/courses', requireAuth, (req,res) => {
   const {title,category,level,price,image,description,video_url,lessons=[]} = req.body;
   if (!title || !category || !level || !description) return res.status(400).json({error:'Missing fields'});
+  const joinedText = [title, category, level, description, ...(Array.isArray(lessons) ? lessons.flatMap(l => [l.title, l.content]) : [])].join(' ');
+  const hits = findBannedWords(joinedText);
+  if (hits.length) return res.status(400).json({ error: `Course blocked by moderation: ${hits.join(', ')}` });
+
+  const data = readData();
   const id = uuid();
-  db.prepare('INSERT INTO courses (id,instructor_id,title,category,level,price,image,description,video_url) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(id, req.user.id, title, category, level, Number(price || 0), image || 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1400&auto=format&fit=crop', description, video_url || '');
-  lessons.forEach((l, i) => db.prepare('INSERT INTO lessons (id,course_id,title,video_url,content,position) VALUES (?,?,?,?,?,?)')
-    .run(uuid(), id, l.title || `Lesson ${i+1}`, l.video_url || '', l.content || '', i+1));
-  res.json({id});
+  const approved = isAdminUser(req.user);
+  const course = {
+    id,
+    instructor_id: req.user.id,
+    title: censorText(title),
+    category,
+    level,
+    price: Number(price || 0),
+    image: image || 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1400&auto=format&fit=crop',
+    description: censorText(description),
+    video_url: video_url || '',
+    published: approved ? 1 : 0,
+    approval_status: approved ? 'approved' : 'pending',
+    created_at: now()
+  };
+  data.courses.push(course);
+  (Array.isArray(lessons) ? lessons : []).forEach((l, i) => data.lessons.push({ id: uuid(), course_id: id, title: censorText(l.title || `Lesson ${i+1}`), video_url: l.video_url || '', content: censorText(l.content || ''), position: i+1, created_at: now() }));
+  saveData();
+
+  if (!approved) {
+    createApprovalRequest({ requester_id: req.user.id, target_type: 'course', target_id: id, title: course.title, body: `Course publish request: ${course.title}`, payload: { category, level, price: course.price } });
+    return res.json({ id, pending_approval: true, message: 'Course sent to admin for approval. It will appear on the site after admin approves it.' });
+  }
+
+  res.json({id, pending_approval: false});
 });
 
 app.post('/api/courses/:id/buy', requireAuth, (req,res) => {
@@ -197,6 +318,215 @@ app.post('/api/notifications/:id/read', requireAuth, (req,res) => {
 
 
 
+app.get('/api/dm/threads', requireAuth, (req,res) => {
+  const data = readData();
+  const threads = data.direct_threads
+    .filter(t => userInDmThread(t, req.user.id))
+    .map(t => dmThreadView(t, req.user.id))
+    .sort((a,b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)));
+  const friends = data.friends
+    .filter(f => f.user1_id === req.user.id || f.user2_id === req.user.id)
+    .map(f => publicUserFromData(data.users.find(u => u.id === (f.user1_id === req.user.id ? f.user2_id : f.user1_id))))
+    .filter(Boolean);
+  res.json({ threads, friends });
+});
+
+app.post('/api/dm/threads', requireAuth, (req,res) => {
+  const { userId } = req.body;
+  const data = readData();
+  const target = data.users.find(u => u.id === userId);
+  if (!target) return res.status(404).json({ error:'User not found' });
+  if (!isFriend(req.user.id, target.id)) return res.status(403).json({ error:'You can message only accepted friends' });
+  const thread = getOrCreateDmThread(req.user.id, target.id);
+  res.json(dmThreadView(thread, req.user.id));
+});
+
+app.get('/api/dm/threads/:id/messages', requireAuth, (req,res) => {
+  const data = readData();
+  const thread = data.direct_threads.find(t => t.id === req.params.id);
+  if (!userInDmThread(thread, req.user.id)) return res.status(403).json({ error:'Not your chat' });
+  const messages = data.direct_messages
+    .filter(m => m.thread_id === thread.id)
+    .sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)))
+    .slice(-200)
+    .map(m => ({ ...m, user: publicUserFromData(data.users.find(u => u.id === m.user_id)) }));
+  res.json(messages);
+});
+
+app.post('/api/dm/threads/:id/messages', requireAuth, (req,res) => {
+  const data = readData();
+  const thread = data.direct_threads.find(t => t.id === req.params.id);
+  if (!userInDmThread(thread, req.user.id)) return res.status(403).json({ error:'Not your chat' });
+  const body = String(req.body.body || '').trim();
+  const type = ['text','image','sticker'].includes(req.body.type) ? req.body.type : 'text';
+  const image = String(req.body.image || '');
+  const sticker = String(req.body.sticker || '');
+  if (type === 'text' && !body) return res.status(400).json({ error:'Message is empty' });
+  if (type === 'image' && !image.startsWith('data:image/')) return res.status(400).json({ error:'Upload a valid image' });
+  if (type === 'image' && image.length > 7_000_000) return res.status(400).json({ error:'Image is too large' });
+  const hits = findBannedWords(body);
+  const message = { id: uuid(), thread_id: thread.id, user_id: req.user.id, type, body: censorText(body), image, sticker, created_at: now() };
+  data.direct_messages.push(message);
+  thread.updated_at = message.created_at;
+  saveData();
+  saveViolation({ user_id:req.user.id, target_type:'direct_message', target_id:message.id, text:body, hits });
+  const otherId = thread.user1_id === req.user.id ? thread.user2_id : thread.user1_id;
+  notifyUser(otherId, 'direct_message', 'New message', `${req.user.name}: ${type === 'text' ? message.body.slice(0, 80) : type}`, { threadId: thread.id });
+  const full = { ...message, user: publicUser(req.user) };
+  io.to(`dm:${thread.id}`).emit('dm:message', full);
+  res.json(full);
+});
+
+app.post('/api/reports', requireAuth, (req,res) => {
+  const { targetType='user', targetId='', reason='bad_content', details='' } = req.body;
+  const data = readData();
+  const report = { id: uuid(), reporter_id: req.user.id, target_type: targetType, target_id: targetId, reason, details: String(details || '').slice(0, 1000), status:'open', created_at: now() };
+  data.reports.unshift(report);
+  saveData();
+  res.json({ ok:true, report });
+});
+
+app.get('/api/admin/stats', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  res.json({
+    users: data.users.length,
+    courses: data.courses.length,
+    published_courses: data.courses.filter(c => c.published !== 0).length,
+    rooms: data.rooms.length,
+    messages: data.messages.length,
+    pending_friend_requests: data.friend_requests.filter(r => r.status === 'pending').length,
+    pending_approvals: data.approval_requests.filter(r => r.status === 'pending').length,
+    moderation: moderationSettings()
+  });
+});
+
+app.get('/api/admin/courses', requireAuth, requireAdmin, (req,res) => {
+  const q = String(req.query.q || '').toLowerCase();
+  const data = readData();
+  const courses = data.courses
+    .filter(c => !q || String(c.title).toLowerCase().includes(q) || String(c.description).toLowerCase().includes(q))
+    .map(adminCourseView)
+    .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+  res.json(courses);
+});
+
+app.delete('/api/admin/courses/:id', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  const before = data.courses.length;
+  data.courses = data.courses.filter(c => c.id !== req.params.id);
+  data.lessons = data.lessons.filter(l => l.course_id !== req.params.id);
+  data.purchases = data.purchases.filter(p => p.course_id !== req.params.id);
+  saveData();
+  res.json({ ok:true, deleted: before - data.courses.length });
+});
+
+app.patch('/api/admin/courses/:id', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  const course = data.courses.find(c => c.id === req.params.id);
+  if (!course) return res.status(404).json({ error:'Course not found' });
+  if (typeof req.body.published !== 'undefined') course.published = req.body.published ? 1 : 0;
+  if (typeof req.body.title === 'string') course.title = censorText(req.body.title);
+  if (typeof req.body.description === 'string') course.description = censorText(req.body.description);
+  saveData();
+  res.json(adminCourseView(course));
+});
+
+app.get('/api/admin/users', requireAuth, requireAdmin, (req,res) => {
+  const q = String(req.query.q || '').toLowerCase();
+  const data = readData();
+  res.json(data.users
+    .filter(u => !q || String(u.name).toLowerCase().includes(q) || String(u.email).toLowerCase().includes(q))
+    .map(u => ({ ...publicUserFromData(u), is_admin:isAdminUser(u), created_at:u.created_at }))
+    .sort((a,b) => String(a.name).localeCompare(String(b.name))));
+});
+
+app.patch('/api/admin/users/:id/role', requireAuth, requireAdmin, (req,res) => {
+  const role = ['student','instructor','admin'].includes(req.body.role) ? req.body.role : 'student';
+  const data = readData();
+  const user = data.users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error:'User not found' });
+  user.role = role;
+  saveData();
+  res.json(publicUser(user));
+});
+
+app.get('/api/admin/moderation', requireAuth, requireAdmin, (req,res) => {
+  res.json(moderationSettings());
+});
+
+app.put('/api/admin/moderation', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  if (!Array.isArray(data.moderation_settings) || data.moderation_settings.length === 0) data.moderation_settings = [{}];
+  data.moderation_settings[0] = {
+    banned_words: Array.isArray(req.body.banned_words) ? normalizeWords(req.body.banned_words.join(',')) : normalizeWords(req.body.banned_words || ''),
+    auto_unpublish: req.body.auto_unpublish !== false
+  };
+  saveData();
+  res.json(data.moderation_settings[0]);
+});
+
+app.post('/api/admin/moderation/test', requireAuth, requireAdmin, (req,res) => {
+  const text = String(req.body.text || '');
+  res.json({ original:text, censored:censorText(text), hits:findBannedWords(text) });
+});
+
+
+
+
+
+app.get('/api/admin/approval-requests', requireAuth, requireAdmin, (req,res) => {
+  const status = String(req.query.status || 'pending');
+  const data = readData();
+  const list = data.approval_requests
+    .filter(r => status === 'all' || r.status === status)
+    .map(approvalRequestView)
+    .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+  res.json(list);
+});
+
+app.post('/api/admin/approval-requests/:id/respond', requireAuth, requireAdmin, (req,res) => {
+  const approve = req.body.approve === true;
+  const note = String(req.body.note || '').slice(0, 500);
+  const data = readData();
+  const request = data.approval_requests.find(r => r.id === req.params.id);
+  if (!request) return res.status(404).json({ error:'Approval request not found' });
+  if (request.status !== 'pending') return res.status(400).json({ error:'Request already handled' });
+
+  request.status = approve ? 'approved' : 'rejected';
+  request.reviewed_by = req.user.id;
+  request.reviewed_at = now();
+  request.note = note;
+
+  if (request.target_type === 'course') {
+    const course = data.courses.find(c => c.id === request.target_id);
+    if (course) {
+      course.approval_status = request.status;
+      course.published = approve ? 1 : 0;
+      course.review_note = note;
+    }
+  }
+
+  if (request.target_type === 'room') {
+    const room = data.rooms.find(r => r.id === request.target_id);
+    if (room) {
+      room.approval_status = request.status;
+      room.is_public = approve && room.requested_public ? 1 : 0;
+      room.review_note = note;
+    }
+  }
+
+  saveData();
+  notifyUser(request.requester_id, approve ? 'approval_approved' : 'approval_rejected', approve ? 'Your request was approved' : 'Your request was rejected', `${request.title} was ${approve ? 'approved and published' : 'rejected'} by admin.${note ? ' Note: ' + note : ''}`, { requestId: request.id, targetType: request.target_type, targetId: request.target_id });
+  res.json({ ok:true, request: approvalRequestView(request) });
+});
+
+app.get('/api/admin/reports', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  const reports = [...data.reports].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,100);
+  const violations = [...data.moderation_violations].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,100);
+  res.json({ reports, violations });
+});
+
 app.get('/api/rooms', requireAuth, (req,res) => {
   const data = readData();
   const mine = data.rooms
@@ -210,7 +540,7 @@ app.get('/api/rooms/public', requireAuth, (req,res) => {
   const q = String(req.query.q || '').toLowerCase();
   const data = readData();
   const rooms = data.rooms
-    .filter(r => r.is_public !== 0)
+    .filter(r => r.is_public !== 0 && (r.approval_status || 'approved') === 'approved')
     .filter(r => !q || r.title.toLowerCase().includes(q) || String(r.description || '').toLowerCase().includes(q))
     .map(r => ({ ...roomWithOwner(r), joined: data.room_members.some(m => m.room_id === r.id && m.user_id === req.user.id) }))
     .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)))
@@ -235,7 +565,19 @@ app.post('/api/rooms', requireAuth, (req,res) => {
   const {title, description='', memberIds=[], course_id=null, is_public=1} = req.body;
   const id = uuid();
   const data = readData();
-  const room = { id, owner_id: req.user.id, title: title || 'New classroom', description, course_id, is_public: is_public ? 1 : 0, invite_code: String(id).slice(0,8).toUpperCase(), created_at: now() };
+  const approved = isAdminUser(req.user) || !is_public;
+  const room = {
+    id,
+    owner_id: req.user.id,
+    title: title || 'New classroom',
+    description,
+    course_id,
+    requested_public: is_public ? 1 : 0,
+    is_public: approved && is_public ? 1 : 0,
+    approval_status: approved ? 'approved' : 'pending',
+    invite_code: String(id).slice(0,8).toUpperCase(),
+    created_at: now()
+  };
   data.rooms.push(room);
   data.room_members.push({ room_id: id, user_id: req.user.id });
   for (const mid of memberIds) {
@@ -243,7 +585,13 @@ app.post('/api/rooms', requireAuth, (req,res) => {
     notifyUser(mid, 'room_invite', 'Room invitation', `${req.user.name} invited you to ${room.title}.`, { roomId: id, roomTitle: room.title });
   }
   saveData();
-  res.json({id, room});
+
+  if (!approved) {
+    createApprovalRequest({ requester_id: req.user.id, target_type: 'room', target_id: id, title: room.title, body: `Public classroom request: ${room.title}`, payload: { description, requested_public: 1 } });
+    return res.json({ id, room, pending_approval: true, message: 'Room created privately and sent to admin for public approval.' });
+  }
+
+  res.json({id, room, pending_approval: false});
 });
 
 
@@ -308,6 +656,13 @@ io.use((socket, next) => {
 
 io.on('connection', socket => {
   socket.join(`user:${socket.user.id}`);
+
+  socket.on('dm:join', ({threadId}) => {
+    const data = readData();
+    const thread = data.direct_threads.find(t => t.id === threadId);
+    if (!userInDmThread(thread, socket.user.id)) return;
+    socket.join(`dm:${thread.id}`);
+  });
   socket.on('room:join', ({roomId}) => {
     const member = db.prepare('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?').get(roomId, socket.user.id);
     if (!member) return;
@@ -320,8 +675,11 @@ io.on('connection', socket => {
     if (!body?.trim()) return;
     const member = db.prepare('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?').get(roomId, socket.user.id);
     if (!member) return;
-    const message = { id: uuid(), room_id: roomId, user_id: socket.user.id, body: body.trim(), created_at: new Date().toISOString(), name: socket.user.name, avatar: socket.user.avatar };
+    const rawBody = body.trim();
+    const hits = findBannedWords(rawBody);
+    const message = { id: uuid(), room_id: roomId, user_id: socket.user.id, body: censorText(rawBody), created_at: new Date().toISOString(), name: socket.user.name, avatar: socket.user.avatar };
     db.prepare('INSERT INTO messages (id,room_id,user_id,body,created_at) VALUES (?,?,?,?,?)').run(message.id, roomId, socket.user.id, message.body, message.created_at);
+    saveViolation({ user_id:socket.user.id, target_type:'room_message', target_id:message.id, text:rawBody, hits });
     io.to(roomId).emit('message:new', message);
   });
 

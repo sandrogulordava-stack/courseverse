@@ -5,7 +5,7 @@ import { v4 as uuid } from 'uuid';
 
 const DB_FILE = path.join(process.cwd(), 'courseverse-data.json');
 
-const initial = () => ({ users: [], courses: [], lessons: [], purchases: [], rooms: [], room_members: [], messages: [], friends: [], friend_requests: [], notifications: [], room_invites: [] });
+const initial = () => ({ users: [], courses: [], lessons: [], purchases: [], rooms: [], room_members: [], messages: [], friends: [], friend_requests: [], notifications: [], room_invites: [], direct_threads: [], direct_messages: [], reports: [], moderation_violations: [], moderation_settings: [{ banned_words: ['spam','scam'], auto_unpublish: true }], approval_requests: [] });
 let data = initial();
 
 function ensureShape() {
@@ -13,10 +13,15 @@ function ensureShape() {
   for (const key of Object.keys(base)) {
     if (!Array.isArray(data[key])) data[key] = [];
   }
+  for (const course of data.courses) {
+    if (!course.approval_status) course.approval_status = course.published === 0 ? 'hidden' : 'approved';
+  }
   for (const room of data.rooms) {
     if (typeof room.is_public === 'undefined') room.is_public = 1;
     if (!room.invite_code) room.invite_code = String(room.id).slice(0, 8).toUpperCase();
     if (!room.description) room.description = '';
+    if (!room.approval_status) room.approval_status = room.is_public === 0 ? 'private' : 'approved';
+    if (typeof room.requested_public === 'undefined') room.requested_public = room.is_public ? 1 : 0;
   }
 }
 function load() {
