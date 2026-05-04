@@ -13,9 +13,17 @@ import { registerAuthRoutes, requireAuth, publicUser, sign, isAdminUser } from '
 migrate();
 const app = express();
 const httpServer = createServer(app);
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const CLIENT_URL = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/$/, '');
+const allowedOrigins = new Set([CLIENT_URL, 'http://localhost:5173', 'http://localhost:3000'].filter(Boolean));
 
-app.use(cors({ origin: CLIENT_URL, credentials: true }));
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    const clean = String(origin).replace(/\/$/, '');
+    return cb(null, allowedOrigins.has(clean));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '12mb' }));
 app.use(session({ secret: process.env.SESSION_SECRET || 'dev-session', resave: false, saveUninitialized: false }));
 app.use(passport.initialize());
