@@ -13,8 +13,14 @@ function ensureShape() {
   for (const key of Object.keys(base)) {
     if (!Array.isArray(data[key])) data[key] = [];
   }
+  for (const user of data.users) {
+    if (!user.status) user.status = 'active';
+    if (typeof user.deleted === 'undefined') user.deleted = 0;
+    if (typeof user.blocked_reason === 'undefined') user.blocked_reason = '';
+  }
   for (const course of data.courses) {
     if (!course.approval_status) course.approval_status = course.published === 0 ? 'hidden' : 'approved';
+    if (typeof course.published === 'undefined') course.published = 1;
   }
   for (const room of data.rooms) {
     if (typeof room.is_public === 'undefined') room.is_public = 1;
@@ -195,8 +201,17 @@ export function saveData() {
 }
 
 export function publicUserFromData(u) {
-  if (!u) return null;
-  return { id:u.id, name:u.name, email:u.email, avatar:u.avatar || '', role:u.role || 'student', headline:u.headline || '', bio:u.bio || '' };
+  if (!u || u.deleted) return null;
+  return {
+    id:u.id,
+    name:u.name,
+    email:u.email,
+    avatar:u.avatar || `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(u.name || 'User')}`,
+    role:u.role || 'student',
+    headline:u.headline || '',
+    bio:u.bio || '',
+    status:u.status || 'active'
+  };
 }
 
 function seed() {

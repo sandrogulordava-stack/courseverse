@@ -18,7 +18,17 @@ export function isAdminUser(user) {
 
 export function publicUser(user) {
   if (!user) return null;
-  return { id:user.id, name:user.name, email:user.email, avatar:user.avatar, role:user.role, headline:user.headline, bio:user.bio, is_admin:isAdminUser(user) };
+  return {
+    id:user.id,
+    name:user.name,
+    email:user.email,
+    avatar:user.avatar || `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(user.name || 'User')}`,
+    role:user.role,
+    headline:user.headline || '',
+    bio:user.bio || '',
+    status:user.status || 'active',
+    is_admin:isAdminUser(user)
+  };
 }
 
 export function requireAuth(req,res,next) {
@@ -26,7 +36,8 @@ export function requireAuth(req,res,next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret');
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(payload.id);
-    if (!user) return res.status(401).json({error:'Unauthorized'});
+    if (!user || user.deleted) return res.status(401).json({error:'Unauthorized'});
+    if (user.status === 'blocked') return res.status(403).json({error: user.blocked_reason || 'Your account is blocked by admin'});
     req.user = user;
     next();
   } catch {
@@ -50,6 +61,8 @@ export function registerAuthRoutes(app) {
     const {email,password} = req.body;
     const user = db.prepare('SELECT * FROM users WHERE email=?').get(String(email || '').toLowerCase());
     if (!user || !user.password_hash || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({error:'Invalid email or password.'});
+    if (user.deleted) return res.status(403).json({error:'This account was deleted by admin.'});
+    if (user.status === 'blocked') return res.status(403).json({error:user.blocked_reason || 'Your account is blocked by admin.'});
     res.json({token:sign(user), user:publicUser(user)});
   });
 

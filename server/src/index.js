@@ -76,6 +76,10 @@ function approvalRequestView(r) {
   let target = null;
   if (r.target_type === 'course') target = data.courses.find(c => c.id === r.target_id);
   if (r.target_type === 'room') target = data.rooms.find(room => room.id === r.target_id);
+  if (r.target_type === 'avatar') {
+    const u = data.users.find(user => user.id === r.target_id);
+    target = { ...(publicUserFromData(u) || {}), requested_avatar: r.payload?.avatar || '' };
+  }
   return { ...r, requester: publicUserFromData(requester), target };
 }
 function createApprovalRequest({ requester_id, target_type, target_id, title, body, payload = {} }) {
@@ -164,6 +168,9 @@ registerAuthRoutes(app);
 
 app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: `${CLIENT_URL}/?auth=failed` }), (req,res) => {
+  if (req.user?.deleted || req.user?.status === 'blocked') {
+    return res.redirect(`${CLIENT_URL}/?auth=blocked`);
+  }
   const token = sign(req.user);
   res.redirect(`${CLIENT_URL}/auth/callback?token=${token}`);
 });
@@ -254,8 +261,8 @@ app.get('/api/users', requireAuth, (req,res) => {
   const q = String(req.query.q || '').toLowerCase();
   const data = readData();
   const users = data.users
-    .filter(u => u.id !== req.user.id)
-    .filter(u => !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+    .filter(u => u.id !== req.user.id && !u.deleted && u.status !== 'blocked')
+    .filter(u => !q || String(u.name).toLowerCase().includes(q) || String(u.email).toLowerCase().includes(q))
     .slice(0, 50)
     .map(u => {
       const pendingOut = data.friend_requests.some(r => r.from_user_id === req.user.id && r.to_user_id === u.id && r.status === 'pending');
@@ -450,8 +457,69 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (req,res) => {
   const data = readData();
   res.json(data.users
     .filter(u => !q || String(u.name).toLowerCase().includes(q) || String(u.email).toLowerCase().includes(q))
-    .map(u => ({ ...publicUserFromData(u), is_admin:isAdminUser(u), created_at:u.created_at }))
+    .map(u => ({
+      ...publicUserFromData(u),
+      raw_email: u.email,
+      is_admin:isAdminUser(u),
+      created_at:u.created_at,
+      status:u.status || 'active',
+      blocked_reason:u.blocked_reason || '',
+      deleted: Number(u.deleted || 0)
+    }))
     .sort((a,b) => String(a.name).localeCompare(String(b.name))));
+});
+
+app.patch('/api/admin/users/:id/remove-avatar', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  const user = data.users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error:'User not found' });
+  user.avatar = `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(user.name || 'User')}`;
+  user.avatar_approval_status = 'removed_by_admin';
+  saveData();
+  notifyUser(user.id, 'admin_action', 'Profile photo removed', 'Your profile photo was removed by admin.', {});
+  res.json({ ok:true, user: publicUserFromData(user) });
+});
+
+app.patch('/api/admin/users/:id/block', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  const user = data.users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error:'User not found' });
+  if (isAdminUser(user) && user.id !== req.user.id) return res.status(403).json({ error:'You cannot block another admin' });
+  user.status = 'blocked';
+  user.blocked_reason = String(req.body.reason || 'Blocked by admin').slice(0, 300);
+  saveData();
+  notifyUser(user.id, 'admin_action', 'Account blocked', user.blocked_reason, {});
+  res.json({ ok:true, user: publicUserFromData(user) });
+});
+
+app.patch('/api/admin/users/:id/unblock', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  const user = data.users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error:'User not found' });
+  user.status = 'active';
+  user.blocked_reason = '';
+  saveData();
+  notifyUser(user.id, 'admin_action', 'Account unblocked', 'Your account was unblocked by admin.', {});
+  res.json({ ok:true, user: publicUserFromData(user) });
+});
+
+app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req,res) => {
+  const data = readData();
+  const user = data.users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error:'User not found' });
+  if (user.id === req.user.id) return res.status(400).json({ error:'You cannot delete your own admin account' });
+  if (isAdminUser(user)) return res.status(403).json({ error:'You cannot delete an admin account' });
+  user.deleted = 1;
+  user.status = 'deleted';
+  user.deleted_at = now();
+  user.email = `${user.email}_deleted_${user.id}`;
+  for (const c of data.courses.filter(c => c.instructor_id === user.id)) {
+    c.published = 0;
+    c.approval_status = 'hidden';
+    c.hidden = 1;
+  }
+  saveData();
+  res.json({ ok:true, message:'User soft-deleted and their courses hidden' });
 });
 
 app.patch('/api/admin/users/:id/role', requireAuth, requireAdmin, (req,res) => {
@@ -514,9 +582,12 @@ app.post('/api/admin/approval-requests/:id/respond', requireAuth, requireAdmin, 
   if (request.target_type === 'course') {
     const course = data.courses.find(c => c.id === request.target_id);
     if (course) {
-      course.approval_status = request.status;
+      course.approval_status = approve ? 'approved' : 'rejected';
       course.published = approve ? 1 : 0;
+      course.hidden = approve ? 0 : 1;
       course.review_note = note;
+      course.approved_at = approve ? now() : course.approved_at;
+      course.approved_by = approve ? req.user.id : course.approved_by;
     }
   }
 
